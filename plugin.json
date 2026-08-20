@@ -1,0 +1,53 @@
+{
+  "$schema": "https://locaryn.dev/schema/plugin.json/v0.1",
+  "apiVersion": "0.1",
+  "name": "plugin-dictaphone",
+  "version": "1.1.0",
+  "description": "Dictaphone et transcription vocale en temps réel pour le chat et la composition d'instructions.",
+  "author": "Locaryn Team",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/Locaryn/plugin-dictaphone",
+  "repository": "https://github.com/Locaryn/plugin-dictaphone",
+  "keywords": [
+    "dictaphone",
+    "voice",
+    "speech-to-text",
+    "audio",
+    "transcription",
+    "whisper"
+  ],
+  "permissions": {
+    "mcp": {
+      "reason": "Lancer le serveur de transcription audio locale."
+    },
+    "files.read": {
+      "reason": "Lire les enregistrements audio du micro."
+    },
+    "files.write": {
+      "reason": "Écrire les fichiers de transcription temporaires."
+    }
+  },
+  "components": {
+    "skills": [
+      "SKILL.md"
+    ],
+    "mcp": "mcp/mcp.json"
+  },
+  "capabilities": [
+    "voice-tts",
+    "speech-to-text"
+  ],
+  "ui_contributions": {
+    "slots": [
+      {
+        "id": "dictaphone-mic-btn",
+        "slot": "composer.before_send",
+        "order": 10,
+        "type": "custom-element",
+        "entry": "dist/ui.js",
+        "tag": "locaryn-dictaphone-btn",
+        "hint": "Dicter votre message (cliquer pour écouter)"
+      }
+    ]
+  }
+}
