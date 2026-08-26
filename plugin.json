@@ -1,13 +1,13 @@
 {
   "$schema": "https://locaryn.dev/schema/plugin.json/v0.1",
   "apiVersion": "0.1",
-  "name": "extension-dictaphone",
+  "name": "morph-dictaphone",
   "version": "1.1.0",
   "description": "Dictaphone et transcription vocale en temps réel pour le chat et la composition d'instructions.",
   "author": "Locaryn Team",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/Locaryn/extension-dictaphone",
-  "repository": "https://github.com/Locaryn/extension-dictaphone",
+  "homepage": "https://github.com/Locaryn/morph-dictaphone",
+  "repository": "https://github.com/Locaryn/morph-dictaphone",
   "keywords": [
     "dictaphone",
     "voice",
