@@ -14,10 +14,9 @@ pub struct TranscribeResult {
     pub confidence: f32,
 }
 
-pub async fn transcribe_audio(req: TranscribeRequest) -> Result<TranscribeResult, String> {
-    Ok(TranscribeResult {
-        text: "Transcription de l'enregistrement vocal réussie.".into(),
-        language: req.language.unwrap_or_else(|| "fr".into()),
-        confidence: 0.98,
-    })
+/// Non implemente. La signature est conservee pour que l'interface et le
+/// serveur MCP gardent leur forme, mais l'appel echoue franchement plutot
+/// que de fabriquer un resultat.
+pub async fn transcribe_audio(_req: TranscribeRequest) -> Result<TranscribeResult, String> {
+    Err("La transcription n'est pas implementee : ce morph n'embarque aucun moteur de reconnaissance vocale.".into())
 }
