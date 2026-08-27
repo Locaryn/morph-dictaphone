@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "dictaphone": {
-      "command": "${LOCARYN_PLUGIN_ROOT}/bin/locaryn-dictaphone-mcp",
+      "command": "${LOCARYN_MORPH_ROOT}/bin/locaryn-dictaphone-mcp",
       "args": [],
       "env": {
         "RUST_LOG": "warn"
