@@ -10,7 +10,9 @@ const VERSION: &str = "1.1.0";
 async fn main() {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let response = match serde_json::from_str::<Value>(&line) {
             Ok(request) => handle_request(request).await,
             Err(error) => error_response(Value::Null, -32700, format!("JSON invalide : {error}")),
@@ -24,18 +26,30 @@ async fn main() {
 
 async fn handle_request(request: Value) -> Value {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let method = request.get("method").and_then(Value::as_str).unwrap_or_default();
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     match method {
-        "initialize" => success(id, json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": "plugin-dictaphone", "version": VERSION }
-        })),
+        "initialize" => success(
+            id,
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "plugin-dictaphone", "version": VERSION }
+            }),
+        ),
         "tools/list" => success(id, tools_list()),
         "tools/call" => {
             let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
-            let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-            let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
             match call_tool(name, args).await {
                 Ok(value) => success(id, text_content(value)),
                 Err(error) => error_response(id, -32000, error),
@@ -67,8 +81,8 @@ fn tools_list() -> Value {
 async fn call_tool(name: &str, args: Value) -> Result<Value, String> {
     match name {
         "transcribe_audio" => {
-            let req: TranscribeRequest = serde_json::from_value(args)
-                .map_err(|e| format!("Paramètres invalides: {e}"))?;
+            let req: TranscribeRequest =
+                serde_json::from_value(args).map_err(|e| format!("Paramètres invalides: {e}"))?;
             let res = transcribe_audio(req).await?;
             Ok(json!(res))
         }
