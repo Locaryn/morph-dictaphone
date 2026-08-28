@@ -65,13 +65,24 @@ fn tools_list() -> Value {
         "tools": [
             {
                 "name": "transcribe_audio",
-                "description": "Transcrit un flux audio enregistré en texte français ou multilingue.",
+                "description": "Transcrit un enregistrement présent sur cette machine, par whisper, sans rien envoyer ailleurs. Rend le texte, la langue reconnue, la durée et les passages horodatés. Le premier appel télécharge le modèle.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "audio_base64": { "type": "string", "description": "Contenu audio encodé en base64" },
-                        "language": { "type": "string", "description": "Langue cible pour la transcription (défaut: fr)" }
-                    }
+                        "file_path": {
+                            "type": "string",
+                            "description": "Chemin du fichier audio sur cette machine (WAV, MP3, M4A, OGG, FLAC)"
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "Code ISO de la langue (fr, en, ja…). Omis : whisper la devine."
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "tiny, base, small, medium ou large-v3. Omis : le réglage du morph (small). Plus gros = meilleur et bien plus lent."
+                        }
+                    },
+                    "required": ["file_path"]
                 }
             }
         ]
