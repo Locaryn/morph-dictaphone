@@ -1,3 +1,3 @@
 # plugin-dictaphone
 
-Extension de dictaphone vocal pour Locaryn.
+Morph de dictaphone vocal pour Locaryn.
