@@ -91,6 +91,13 @@ fn tools_list() -> Value {
 
 async fn call_tool(name: &str, args: Value) -> Result<Value, String> {
     match name {
+        "transcribe_audio"
+            if args.get("__locaryn_preflight").and_then(Value::as_bool) == Some(true) =>
+        {
+            let req: TranscribeRequest = serde_json::from_value(args)
+                .map_err(|e| format!("Paramètres de transcription invalides : {e}"))?;
+            Ok(locaryn_plugin_dictaphone::preflight_transcribe(&req))
+        }
         "transcribe_audio" => {
             let req: TranscribeRequest =
                 serde_json::from_value(args).map_err(|e| format!("Paramètres invalides: {e}"))?;

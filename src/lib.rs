@@ -95,6 +95,56 @@ pub struct TranscribeResult {
 // ── Transcription ───────────────────────────────────────────────────────────
 
 /// Transcrire un enregistrement.
+/// La mémoire vidéo d'un modèle Whisper en float16 (faster-whisper), d'après
+/// son nom. Un nom inconnu compte comme le plus gros : mieux vaut libérer la
+/// carte pour rien que la saturer.
+pub fn whisper_vram_gb(modele: &str) -> f32 {
+    let m = modele.to_ascii_lowercase();
+    if m.contains("tiny") {
+        0.6
+    } else if m.contains("base") {
+        0.8
+    } else if m.contains("small") {
+        1.2
+    } else if m.contains("medium") {
+        2.5
+    } else if m.contains("turbo") || m.contains("distil") {
+        2.2
+    } else {
+        4.0
+    }
+}
+
+/// L'appel à blanc de l'hôte : fichier, Python, modèle — sans rien charger.
+pub fn preflight_transcribe(req: &TranscribeRequest) -> serde_json::Value {
+    let chemin = PathBuf::from(&req.file_path);
+    if !chemin.is_file() {
+        return serde_json::json!({ "ready": false, "problem": format!("Fichier introuvable : {}", chemin.display()) });
+    }
+    if find_python().is_none() {
+        return serde_json::json!({ "ready": false, "problem": "Python introuvable. Installez Python 3.10 ou plus récent." });
+    }
+    let cfg = config();
+    let modele = req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .unwrap_or(&cfg.model)
+        .to_string();
+    // Sur processeur, la carte n'est pas sollicitée.
+    let vram_gb = if cfg.device.eq_ignore_ascii_case("cpu") {
+        0.0
+    } else {
+        whisper_vram_gb(&modele)
+    };
+    serde_json::json!({
+        "ready": true,
+        "vram_gb": vram_gb,
+        "summary": format!("transcription avec Whisper {modele}")
+    })
+}
+
 pub async fn transcribe_audio(req: TranscribeRequest) -> Result<TranscribeResult, String> {
     let chemin = PathBuf::from(&req.file_path);
     if !chemin.is_file() {
@@ -342,6 +392,27 @@ async fn run_python(python: &str, script: &str) -> Result<String, String> {
     } else {
         msg
     })
+}
+
+#[cfg(test)]
+mod tests_preflight {
+    use super::*;
+
+    #[test]
+    fn un_fichier_absent_est_refuse_a_blanc() {
+        let v = preflight_transcribe(&TranscribeRequest {
+            file_path: "Z:/nulle-part/note.wav".into(),
+            language: None,
+            model: None,
+        });
+        assert_eq!(v["ready"], false);
+    }
+
+    #[test]
+    fn la_place_suit_la_taille_du_modele() {
+        assert!(whisper_vram_gb("tiny") < whisper_vram_gb("small"));
+        assert!(whisper_vram_gb("large-v3") >= 4.0);
+    }
 }
 
 #[cfg(test)]

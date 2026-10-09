@@ -33,6 +33,11 @@
     ],
     "mcp": "mcp/mcp.json"
   },
+  "gpu": {
+    "tools": {
+      "transcribe_audio": {}
+    }
+  },
   "capabilities": [
     "voice-tts",
     "speech-to-text"
