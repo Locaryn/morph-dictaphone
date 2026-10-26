@@ -1,12 +1,14 @@
 // Bouton micro du composeur (slot `composer.before_send`).
 //
 // Cliquer ouvre le micro : une onde suit la voix, un compteur dit depuis
-// combien de temps on parle. Recliquer arrête ; Échap annule. Le clip part
-// vers `ui_transcribe_clip` (outil réservé au panneau, invisible du modèle),
-// puis le texte s'écrit dans le champ de saisie, lettre après lettre.
+// combien de temps on parle. Le carré termine ; Échap ou la croix annule. Le
+// clip part vers `ui_transcribe_clip` (outil réservé au panneau, invisible du
+// modèle), puis le texte s'écrit dans le champ de saisie, lettre après lettre.
 //
 // Rendu dans le document, avec les classes de l'application : pas de racine
-// fantôme, le thème de l'hôte s'applique.
+// fantôme, le thème de l'hôte s'applique. Aucun attribut `style` : la
+// politique de sécurité de l'hôte les bloque. Les styles passent par
+// `element.style`, qu'elle autorise.
 (function () {
   "use strict";
 
@@ -35,6 +37,38 @@
     if (a && a.ui && a.ui.showToast) a.ui.showToast(message, type || "info");
     else console.warn("[dictaphone]", message);
   }
+
+  // Un élément, ses attributs, ses styles (par `element.style`) et ses enfants.
+  function el(tag, attrs, styles, enfants) {
+    var n = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    if (styles) Object.assign(n.style, styles);
+    (enfants || []).forEach(function (c) {
+      n.append(c);
+    });
+    return n;
+  }
+
+  // Une icône SVG : ses attributs de dessin ne sont pas des styles.
+  function icone(svg) {
+    var s = el("span", { "aria-hidden": "true" }, { display: "inline-flex" });
+    s.innerHTML = svg;
+    return s;
+  }
+
+  var ROND = {
+    display: "inline-grid",
+    placeItems: "center",
+    minWidth: "24px",
+    minHeight: "24px",
+    padding: "0",
+    border: "0",
+    borderRadius: "50%",
+    cursor: "pointer",
+  };
 
   // La réponse d'un outil arrive en texte JSON, parfois enveloppée dans le
   // `content` MCP.
@@ -110,14 +144,10 @@
     constructor() {
       super();
       this.etat = "repos"; // repos | ecoute | transcription
-      this.flux = null;
-      this.enregistreur = null;
-      this.morceaux = [];
-      this.annule = false;
-      this.debut = 0;
+      // L'écoute en cours : son flux, son enregistreur, ses morceaux. Une
+      // écoute précédente qui finirait en retard ne touche pas à celle-ci.
+      this.ecoute = null;
       this.anim = 0;
-      this.contexteAudio = null;
-      this.analyseur = null;
       this.surTouche = this.surTouche.bind(this);
     }
 
@@ -128,84 +158,104 @@
     }
 
     disconnectedCallback() {
-      this.annule = true;
-      this.liberer();
+      cancelAnimationFrame(this.anim);
+      document.removeEventListener("keydown", this.surTouche, true);
+      if (this.ecoute) this.fermer(this.ecoute, true);
     }
 
     render() {
       cancelAnimationFrame(this.anim);
+      this.replaceChildren();
       if (this.etat === "ecoute") return this.renderEcoute();
       if (this.etat === "transcription") return this.renderTranscription();
-      this.innerHTML =
-        '<button type="button" class="locaryn-chip-btn" title="Dicter un message" aria-label="Dicter un message">' +
-        MIC +
-        "</button>";
+      var bouton = el(
+        "button",
+        { type: "button", class: "locaryn-chip-btn", title: "Dicter un message", "aria-label": "Dicter un message" },
+        null,
+        [icone(MIC)],
+      );
       var self = this;
-      this.querySelector("button").addEventListener("click", function () {
+      bouton.addEventListener("click", function () {
         self.demarrer();
       });
+      this.append(bouton);
     }
 
     renderEcoute() {
-      var barres = "";
-      for (var i = 0; i < BARRES; i++) {
-        barres +=
-          '<span data-barre style="display:block;width:3px;height:4px;border-radius:2px;' +
-          'background:var(--accent);transition:height 80ms linear"></span>';
-      }
-      this.innerHTML =
-        '<span class="locaryn-chip-btn locaryn-chip-on" role="group" aria-label="Dictée en cours" ' +
-        'style="gap:8px;padding-right:4px">' +
-        '<button type="button" data-annuler class="locaryn-btn-ghost" title="Annuler (Échap)" aria-label="Annuler la dictée" ' +
-        'style="display:inline-grid;place-items:center;min-width:24px;min-height:24px;padding:0;border:0;background:none;color:inherit;cursor:pointer">' +
-        CROIX +
-        "</button>" +
-        '<span aria-hidden="true" style="display:inline-flex;align-items:center;gap:2px;height:18px">' +
-        barres +
-        "</span>" +
-        '<span data-temps style="font-family:var(--font-mono);font-size:11px;min-width:30px">0:00</span>' +
-        '<button type="button" data-arreter title="Terminer la dictée" aria-label="Terminer la dictée" ' +
-        'style="display:inline-grid;place-items:center;min-width:24px;min-height:24px;border-radius:50%;border:0;' +
-        'background:var(--accent);color:var(--on-accent);cursor:pointer">' +
-        STOP +
-        "</button></span>";
       var self = this;
-      this.querySelector("[data-arreter]").addEventListener("click", function () {
-        self.arreter(false);
-      });
-      this.querySelector("[data-annuler]").addEventListener("click", function () {
+      var annuler = el(
+        "button",
+        { type: "button", class: "locaryn-btn-ghost", title: "Annuler (Échap)", "aria-label": "Annuler la dictée" },
+        Object.assign({}, ROND, { background: "none", color: "inherit" }),
+        [icone(CROIX)],
+      );
+      annuler.addEventListener("click", function () {
         self.arreter(true);
       });
-      this.querySelector("[data-arreter]").focus();
-      this.animerOnde();
+      var barres = [];
+      for (var i = 0; i < BARRES; i++) {
+        barres.push(
+          el("span", { "data-barre": "" }, {
+            display: "block",
+            width: "3px",
+            height: "4px",
+            borderRadius: "2px",
+            background: "var(--accent)",
+            transition: "height 80ms linear",
+          }),
+        );
+      }
+      var onde = el("span", { "aria-hidden": "true" }, { display: "inline-flex", alignItems: "center", gap: "2px", height: "18px" }, barres);
+      var temps = el("span", { "data-temps": "" }, { fontFamily: "var(--font-mono)", fontSize: "11px", minWidth: "30px" }, ["0:00"]);
+      var arreter = el(
+        "button",
+        { type: "button", title: "Terminer la dictée", "aria-label": "Terminer la dictée", "data-arreter": "" },
+        Object.assign({}, ROND, { background: "var(--accent)", color: "var(--on-accent)" }),
+        [icone(STOP)],
+      );
+      arreter.addEventListener("click", function () {
+        self.arreter(false);
+      });
+      var pastille = el(
+        "span",
+        { class: "locaryn-chip-btn locaryn-chip-on", role: "group", "aria-label": "Dictée en cours" },
+        { gap: "8px", paddingRight: "4px" },
+        [annuler, onde, temps, arreter],
+      );
+      this.append(pastille);
+      arreter.focus();
+      this.animerOnde(barres, temps);
     }
 
     renderTranscription() {
-      var points = "";
+      var points = [];
       for (var i = 0; i < 3; i++) {
-        points +=
-          '<span data-point style="display:block;width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.35"></span>';
+        points.push(
+          el("span", null, { display: "block", width: "5px", height: "5px", borderRadius: "50%", background: "currentColor", opacity: "0.35" }),
+        );
       }
-      this.innerHTML =
-        '<span class="locaryn-chip-btn" role="status" aria-live="polite" style="gap:8px;cursor:default">' +
-        '<span aria-hidden="true" style="display:inline-flex;gap:3px;align-items:center">' +
-        points +
-        "</span>" +
-        '<span data-libelle>Transcription…</span></span>';
-      this.animerPoints();
+      var libelle = el("span", null, null, ["Transcription…"]);
+      var statut = el(
+        "span",
+        { class: "locaryn-chip-btn", role: "status", "aria-live": "polite" },
+        { gap: "8px", cursor: "default" },
+        [el("span", { "aria-hidden": "true" }, { display: "inline-flex", gap: "3px", alignItems: "center" }, points), libelle],
+      );
+      this.append(statut);
+      this.animerPoints(points, libelle);
     }
 
     // L'onde suit le niveau réel du micro, réparti sur les barres.
-    animerOnde() {
-      var barres = this.querySelectorAll("[data-barre]");
-      var temps = this.querySelector("[data-temps]");
-      var donnees = this.analyseur ? new Uint8Array(this.analyseur.frequencyBinCount) : null;
+    animerOnde(barres, temps) {
+      var ecoute = this.ecoute;
+      var analyseur = ecoute && ecoute.analyseur;
+      var donnees = analyseur ? new Uint8Array(analyseur.frequencyBinCount) : null;
       var self = this;
       var tick = function () {
-        if (self.etat !== "ecoute") return;
-        if (temps) temps.textContent = duree(Date.now() - self.debut);
-        if (donnees && self.analyseur) {
-          self.analyseur.getByteFrequencyData(donnees);
+        if (self.etat !== "ecoute" || self.ecoute !== ecoute) return;
+        temps.textContent = duree(Date.now() - ecoute.debut);
+        if (donnees) {
+          analyseur.getByteFrequencyData(donnees);
           var pas = Math.floor(donnees.length / BARRES) || 1;
           for (var i = 0; i < barres.length; i++) {
             var v = donnees[i * pas] / 255;
@@ -217,20 +267,18 @@
       tick();
     }
 
-    animerPoints() {
-      var points = this.querySelectorAll("[data-point]");
-      var libelle = this.querySelector("[data-libelle]");
+    animerPoints(points, libelle) {
       var depart = Date.now();
       var self = this;
       var tick = function () {
         if (self.etat !== "transcription") return;
         var t = (Date.now() - depart) / 1000;
         for (var i = 0; i < points.length; i++) {
-          var phase = Math.sin(t * 6 - i * 0.9);
-          points[i].style.opacity = String(0.35 + Math.max(0, phase) * 0.65);
-          if (!mouvementReduit()) points[i].style.transform = "translateY(" + (-Math.max(0, phase) * 3) + "px)";
+          var phase = Math.max(0, Math.sin(t * 6 - i * 0.9));
+          points[i].style.opacity = String(0.35 + phase * 0.65);
+          if (!mouvementReduit()) points[i].style.transform = "translateY(" + -phase * 3 + "px)";
         }
-        if (libelle && t > 6) libelle.textContent = "Transcription… " + Math.floor(t) + " s";
+        if (t > 6) libelle.textContent = "Transcription… " + Math.floor(t) + " s";
         self.anim = requestAnimationFrame(tick);
       };
       tick();
@@ -249,7 +297,9 @@
         return;
       }
       // La préparation part tout de suite : on parle pendant qu'elle se fait.
-      preparer().catch(function () {});
+      preparer().catch(function (e) {
+        console.warn("[dictaphone] préparation :", e);
+      });
       var self = this;
       navigator.mediaDevices
         .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
@@ -263,70 +313,78 @@
     }
 
     ouvrir(flux) {
-      this.flux = flux;
-      this.morceaux = [];
-      this.annule = false;
       var type = typeAudio();
-      this.enregistreur = type ? new MediaRecorder(flux, { mimeType: type }) : new MediaRecorder(flux);
+      var ecoute = {
+        flux: flux,
+        type: type || "audio/webm",
+        morceaux: [],
+        annule: false,
+        debut: Date.now(),
+        enregistreur: type ? new MediaRecorder(flux, { mimeType: type }) : new MediaRecorder(flux),
+        contexte: null,
+        analyseur: null,
+      };
       var self = this;
-      this.enregistreur.ondataavailable = function (e) {
-        if (e.data && e.data.size) self.morceaux.push(e.data);
+      ecoute.enregistreur.ondataavailable = function (e) {
+        if (e.data && e.data.size) ecoute.morceaux.push(e.data);
       };
-      this.enregistreur.onstop = function () {
-        self.apresEcoute();
+      ecoute.enregistreur.onstop = function () {
+        self.apresEcoute(ecoute);
       };
-      this.brancherAnalyseur(flux);
-      this.enregistreur.start(250);
-      this.debut = Date.now();
+      this.brancherAnalyseur(ecoute);
+      // Sans découpage : un seul morceau à l'arrêt, en-tête compris.
+      ecoute.enregistreur.start();
+      this.ecoute = ecoute;
       this.etat = "ecoute";
       document.addEventListener("keydown", this.surTouche, true);
       this.render();
     }
 
-    brancherAnalyseur(flux) {
+    brancherAnalyseur(ecoute) {
       try {
         var Ctx = window.AudioContext || window.webkitAudioContext;
-        this.contexteAudio = new Ctx();
-        this.analyseur = this.contexteAudio.createAnalyser();
-        this.analyseur.fftSize = 64;
-        this.analyseur.smoothingTimeConstant = 0.7;
-        this.contexteAudio.createMediaStreamSource(flux).connect(this.analyseur);
+        ecoute.contexte = new Ctx();
+        ecoute.analyseur = ecoute.contexte.createAnalyser();
+        ecoute.analyseur.fftSize = 64;
+        ecoute.analyseur.smoothingTimeConstant = 0.7;
+        ecoute.contexte.createMediaStreamSource(ecoute.flux).connect(ecoute.analyseur);
       } catch (e) {
         // Sans analyseur, l'onde reste à plat ; l'enregistrement continue.
         console.warn("[dictaphone] analyseur audio indisponible :", e);
-        this.analyseur = null;
+        ecoute.analyseur = null;
       }
     }
 
     arreter(annuler) {
-      this.annule = !!annuler;
+      var ecoute = this.ecoute;
+      if (!ecoute) return;
       document.removeEventListener("keydown", this.surTouche, true);
-      if (this.enregistreur && this.enregistreur.state !== "inactive") this.enregistreur.stop();
-      else this.apresEcoute();
+      this.fermer(ecoute, annuler);
     }
 
-    liberer() {
-      if (this.flux) {
-        this.flux.getTracks().forEach(function (t) {
-          t.stop();
-        });
-      }
-      if (this.contexteAudio) {
-        this.contexteAudio.close().catch(function (e) {
+    // Arrêter l'enregistreur ; `onstop` rend la suite à `apresEcoute`.
+    fermer(ecoute, annuler) {
+      ecoute.annule = ecoute.annule || !!annuler;
+      if (ecoute.enregistreur.state !== "inactive") ecoute.enregistreur.stop();
+      else this.apresEcoute(ecoute);
+    }
+
+    liberer(ecoute) {
+      ecoute.flux.getTracks().forEach(function (t) {
+        t.stop();
+      });
+      if (ecoute.contexte) {
+        ecoute.contexte.close().catch(function (e) {
           console.warn("[dictaphone] fermeture audio :", e);
         });
       }
-      this.flux = null;
-      this.contexteAudio = null;
-      this.analyseur = null;
-      this.enregistreur = null;
     }
 
-    apresEcoute() {
-      var type = (this.enregistreur && this.enregistreur.mimeType) || typeAudio() || "audio/webm";
-      var morceaux = this.morceaux;
-      this.liberer();
-      if (this.annule || !morceaux.length) {
+    apresEcoute(ecoute) {
+      this.liberer(ecoute);
+      if (this.ecoute !== ecoute) return;
+      this.ecoute = null;
+      if (ecoute.annule || !ecoute.morceaux.length) {
         this.etat = "repos";
         this.render();
         return;
@@ -334,7 +392,8 @@
       this.etat = "transcription";
       this.render();
       var self = this;
-      var blob = new Blob(morceaux, { type: type });
+      var type = ecoute.enregistreur.mimeType || ecoute.type;
+      var blob = new Blob(ecoute.morceaux, { type: type });
       preparer()
         .then(function () {
           return enDataUrl(blob);

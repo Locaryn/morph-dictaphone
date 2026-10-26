@@ -2,7 +2,7 @@
   "$schema": "https://locaryn.dev/schema/morph.json/v0.1",
   "apiVersion": "0.1",
   "name": "morph-dictaphone",
-  "version": "2.4.0-beta.1",
+  "version": "2.4.1-beta.1",
   "description": "Transcrire un enregistrement sur la machine, par whisper. Texte, langue reconnue et passages horodatés ; rien n'est envoyé ailleurs.",
   "author": "Locaryn Team",
   "license": "Apache-2.0",
@@ -58,6 +58,14 @@
   "beta": true,
   "stability": "untested",
   "versions": [
+    {
+      "version": "2.4.1-beta.1",
+      "is_beta": true,
+      "summary": "L'onde et l'animation s'affichent (la politique de sécurité de l'hôte bloquait les attributs style) ; un enregistrement ne mélange plus ses morceaux avec le précédent",
+      "tag": "v2.4.1-beta.1",
+      "released_at": "2026-10-26",
+      "install_source": "Locaryn/morph-dictaphone#v2.4.1-beta.1"
+    },
     {
       "version": "2.4.0-beta.1",
       "is_beta": true,
