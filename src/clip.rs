@@ -75,9 +75,7 @@ pub async fn prepare() -> Result<Value, String> {
 }
 
 async fn whisper_importable(python: &str) -> bool {
-    run_python_args(python, &["-c", SONDE])
-        .await
-        .is_ok()
+    run_python_args(python, &["-c", SONDE]).await.is_ok()
 }
 
 /// Transcrire un clip venu du micro.
@@ -87,14 +85,19 @@ pub async fn transcribe_clip(req: ClipRequest) -> Result<TranscribeResult, Strin
         return Err("L'enregistrement est vide : le micro n'a rien capté.".into());
     }
     if octets.len() > CLIP_MAX_BYTES {
-        return Err("Clip trop long pour une dictée : enregistrez un fichier et transcrivez-le.".into());
+        return Err(
+            "Clip trop long pour une dictée : enregistrez un fichier et transcrivez-le.".into(),
+        );
     }
     let dossier = clip_dir();
-    std::fs::create_dir_all(&dossier)
-        .map_err(|e| format!("Le dossier {} n'a pas pu être créé : {e}", dossier.display()))?;
+    std::fs::create_dir_all(&dossier).map_err(|e| {
+        format!(
+            "Le dossier {} n'a pas pu être créé : {e}",
+            dossier.display()
+        )
+    })?;
     let chemin = dossier.join(nom_de_clip(&req.mime));
-    std::fs::write(&chemin, &octets)
-        .map_err(|e| format!("Le clip n'a pas pu être écrit : {e}"))?;
+    std::fs::write(&chemin, &octets).map_err(|e| format!("Le clip n'a pas pu être écrit : {e}"))?;
 
     let resultat = transcribe_audio(TranscribeRequest {
         file_path: chemin.to_string_lossy().into_owned(),
@@ -103,7 +106,10 @@ pub async fn transcribe_clip(req: ClipRequest) -> Result<TranscribeResult, Strin
     })
     .await;
     if let Err(e) = std::fs::remove_file(&chemin) {
-        eprintln!("dictaphone : le clip {} n'a pas pu être effacé : {e}", chemin.display());
+        eprintln!(
+            "dictaphone : le clip {} n'a pas pu être effacé : {e}",
+            chemin.display()
+        );
     }
     resultat
 }
@@ -140,7 +146,11 @@ fn nom_de_clip(mime: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    format!("dictee-{}-{instant}.{}", std::process::id(), extension(mime))
+    format!(
+        "dictee-{}-{instant}.{}",
+        std::process::id(),
+        extension(mime)
+    )
 }
 
 /// Le dossier temporaire que l'hôte désigne — jamais le disque système quand
@@ -159,7 +169,10 @@ mod tests {
 
     #[test]
     fn le_prefixe_d_url_de_donnees_est_retire() {
-        assert_eq!(decode("data:audio/webm;base64,AQID").unwrap(), vec![1, 2, 3]);
+        assert_eq!(
+            decode("data:audio/webm;base64,AQID").unwrap(),
+            vec![1, 2, 3]
+        );
         assert_eq!(decode("AQID").unwrap(), vec![1, 2, 3]);
         assert!(decode("pas du base64 !").is_err());
     }
