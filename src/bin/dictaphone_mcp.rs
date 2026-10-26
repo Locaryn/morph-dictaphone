@@ -1,5 +1,5 @@
 //! Stdio MCP server shipped by plugin-dictaphone.
-use locaryn_plugin_dictaphone::{transcribe_audio, TranscribeRequest};
+use locaryn_plugin_dictaphone::{clip, transcribe_audio, TranscribeRequest};
 use serde_json::{json, Value};
 use std::io::Write;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -84,6 +84,31 @@ fn tools_list() -> Value {
                     },
                     "required": ["file_path"]
                 }
+            },
+            // Les outils `ui_` servent le bouton micro ; l'hôte les cache au
+            // modèle.
+            {
+                "name": "ui_dictation_status",
+                "description": "La dictée est-elle prête (Python, faster-whisper) ?",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_dictation_prepare",
+                "description": "Installer faster-whisper pour la dictée (une seule fois).",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_transcribe_clip",
+                "description": "Transcrire un clip enregistré au micro par le bouton du composeur.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "audio_base64": { "type": "string" },
+                        "mime": { "type": "string" },
+                        "language": { "type": "string" }
+                    },
+                    "required": ["audio_base64"]
+                }
             }
         ]
     })
@@ -103,6 +128,13 @@ async fn call_tool(name: &str, args: Value) -> Result<Value, String> {
                 serde_json::from_value(args).map_err(|e| format!("Paramètres invalides: {e}"))?;
             let res = transcribe_audio(req).await?;
             Ok(json!(res))
+        }
+        "ui_dictation_status" => Ok(clip::status().await),
+        "ui_dictation_prepare" => clip::prepare().await,
+        "ui_transcribe_clip" => {
+            let req: clip::ClipRequest =
+                serde_json::from_value(args).map_err(|e| format!("Paramètres invalides: {e}"))?;
+            Ok(json!(clip::transcribe_clip(req).await?))
         }
         _ => Err(format!("Outil dictaphone inconnu : {name}")),
     }

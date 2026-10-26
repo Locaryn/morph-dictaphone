@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod clip;
+
 // ── Réglages ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,18 +193,29 @@ else:
     except ImportError:
         device = "cpu"
 
-# int8 sur processeur : sans cela un enregistrement d'une minute prend
-# plusieurs minutes, et float16 n'existe pas la.
-compute = "float16" if device == "cuda" else "int8"
+def transcrire(device):
+    # int8 sur processeur : sans cela un enregistrement d'une minute prend
+    # plusieurs minutes, et float16 n'existe pas la.
+    compute = "float16" if device == "cuda" else "int8"
+    asr = WhisperModel(modele, device=device, compute_type=compute)
+    segments, info = asr.transcribe(chemin, beam_size=5, language=langue)
+    # `segments` est un generateur : il ne travaille qu'a la lecture, et c'est
+    # la que la carte peut manquer de memoire.
+    morceaux = [
+        {{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}}
+        for s in segments
+    ]
+    return morceaux, info
 
-asr = WhisperModel(modele, device=device, compute_type=compute)
-segments, info = asr.transcribe(chemin, beam_size=5, language=langue)
-
-# `segments` est un generateur : il ne travaille qu'a la lecture.
-morceaux = [
-    {{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}}
-    for s in segments
-]
+try:
+    morceaux, info = transcrire(device)
+except Exception as e:
+    # Carte occupee par le modele de conversation, ou bibliotheques CUDA
+    # absentes : le processeur transcrit plus lentement, mais transcrit.
+    if device != "cuda":
+        raise
+    print(f"carte indisponible ({{e}}) : transcription sur le processeur", file=sys.stderr)
+    morceaux, info = transcrire("cpu")
 sortie = {{
     "text": " ".join(m["text"] for m in morceaux).strip(),
     "language": info.language,
@@ -289,10 +302,10 @@ pub fn find_python() -> Option<String> {
             return Some(exe.to_string_lossy().to_string());
         }
     }
-    if let Ok(out) = std::process::Command::new("python")
-        .arg("--version")
-        .output()
-    {
+    let mut sonde = std::process::Command::new("python");
+    sonde.arg("--version");
+    hide_console(&mut sonde);
+    if let Ok(out) = sonde.output() {
         if out.status.success() {
             return Some("python".to_string());
         }
@@ -338,6 +351,10 @@ fn venvs() -> Vec<PathBuf> {
 /// remplit le disque système.
 fn python_env() -> Vec<(&'static str, String)> {
     let mut env = vec![
+        // Sous Windows, Python écrit sa sortie dans la page de code de la
+        // console (cp1252) ; lue en UTF-8, « dictée » devenait « dict�e ».
+        ("PYTHONIOENCODING", "utf-8".to_string()),
+        ("PYTHONUTF8", "1".to_string()),
         ("TRANSFORMERS_NO_TF", "1".to_string()),
         ("USE_TF", "0".to_string()),
         ("TF_CPP_MIN_LOG_LEVEL", "3".to_string()),
@@ -359,15 +376,31 @@ fn python_env() -> Vec<(&'static str, String)> {
     env
 }
 
-/// Lancer `python -c <script>` et rendre sa sortie standard.
-async fn run_python(python: &str, script: &str) -> Result<String, String> {
-    let out = tokio::process::Command::new(python)
+/// Sous Windows, un programme console lancé par un processus sans console
+/// ouvre sa propre fenêtre noire. Le serveur MCP n'en a pas : sans ce
+/// drapeau, chaque transcription faisait surgir une console.
+pub fn hide_console(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// Lancer `python <args>` sans console et rendre sa sortie standard.
+pub(crate) async fn run_python_args(python: &str, args: &[&str]) -> Result<String, String> {
+    let mut command = std::process::Command::new(python);
+    command
         .envs(python_env())
-        .arg("-c")
-        .arg(script)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    hide_console(&mut command);
+    let out = tokio::process::Command::from(command)
         .output()
         .await
         .map_err(|e| format!("impossible de lancer Python : {e}"))?;
@@ -375,6 +408,16 @@ async fn run_python(python: &str, script: &str) -> Result<String, String> {
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
+    Err(derniere_erreur(&out))
+}
+
+/// Lancer `python -c <script>` et rendre sa sortie standard.
+async fn run_python(python: &str, script: &str) -> Result<String, String> {
+    run_python_args(python, &["-c", script]).await
+}
+
+/// Les dernières lignes utiles d'une sortie d'erreur Python.
+fn derniere_erreur(out: &std::process::Output) -> String {
     // Une trace Python complète noie le message utile ; ses dernières lignes
     // le portent.
     let err = String::from_utf8_lossy(&out.stderr);
@@ -387,11 +430,11 @@ async fn run_python(python: &str, script: &str) -> Result<String, String> {
         .cloned()
         .collect::<Vec<_>>()
         .join(" / ");
-    Err(if msg.is_empty() {
-        format!("la transcription s'est arrêtée ({})", out.status)
+    if msg.is_empty() {
+        format!("Python s'est arrêté ({})", out.status)
     } else {
         msg
-    })
+    }
 }
 
 #[cfg(test)]
