@@ -1,5 +1,5 @@
 //! Stdio MCP server shipped by plugin-dictaphone.
-use locaryn_plugin_dictaphone::{clip, transcribe_audio, TranscribeRequest};
+use locaryn_plugin_dictaphone::{clip, live, transcribe_audio, TranscribeRequest};
 use serde_json::{json, Value};
 use std::io::Write;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -109,6 +109,48 @@ fn tools_list() -> Value {
                     },
                     "required": ["audio_base64"]
                 }
+            },
+            {
+                "name": "ui_live_status",
+                "description": "La transcription en direct est-elle prête (modèle installé, paquets Python) ?",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_live_prepare",
+                "description": "Installer les paquets Python de la transcription en direct (une seule fois).",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_live_start",
+                "description": "Ouvrir une dictée en direct : charge le modèle s'il ne l'est pas.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "language": { "type": "string" } }
+                }
+            },
+            {
+                "name": "ui_live_audio",
+                "description": "Un bloc de micro (PCM 16 bits, 16 kHz, mono, base64) ; rend le texte provisoire du segment.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "pcm": { "type": "string" } },
+                    "required": ["pcm"]
+                }
+            },
+            {
+                "name": "ui_live_end",
+                "description": "Clore le segment en cours ; rend son texte et son numéro. La repasse complète arrive plus tard dans `corrections`.",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_live_poll",
+                "description": "Relever les repasses terminées (`corrections`).",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
+                "name": "ui_live_drain",
+                "description": "Fin de dictée : faire les repasses en attente et les rendre.",
+                "inputSchema": { "type": "object", "properties": {} }
             }
         ]
     })
@@ -136,6 +178,25 @@ async fn call_tool(name: &str, args: Value) -> Result<Value, String> {
                 serde_json::from_value(args).map_err(|e| format!("Paramètres invalides: {e}"))?;
             Ok(json!(clip::transcribe_clip(req).await?))
         }
+        "ui_live_status" => Ok(live::status().await),
+        "ui_live_prepare" => live::prepare().await,
+        "ui_live_start" => {
+            let langue = args
+                .get("language")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            live::start(langue).await
+        }
+        "ui_live_audio" => {
+            let pcm = args
+                .get("pcm")
+                .and_then(Value::as_str)
+                .ok_or("Paramètre `pcm` manquant")?;
+            live::audio(pcm.to_string()).await
+        }
+        "ui_live_end" => live::end().await,
+        "ui_live_poll" => live::poll().await,
+        "ui_live_drain" => live::drain().await,
         _ => Err(format!("Outil dictaphone inconnu : {name}")),
     }
 }

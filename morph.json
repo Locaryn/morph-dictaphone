@@ -2,8 +2,8 @@
   "$schema": "https://locaryn.dev/schema/morph.json/v0.1",
   "apiVersion": "0.1",
   "name": "morph-dictaphone",
-  "version": "2.4.1-beta.1",
-  "description": "Transcrire un enregistrement sur la machine, par whisper. Texte, langue reconnue et passages horodatés ; rien n'est envoyé ailleurs.",
+  "version": "2.5.0-beta.1",
+  "description": "Transcrire un enregistrement sur la machine, par whisper, et dicter en direct : le texte s'affiche pendant qu'on parle (Nemotron 3.5 ASR). Rien n'est envoyé ailleurs.",
   "author": "Locaryn Team",
   "license": "Apache-2.0",
   "homepage": "https://github.com/Locaryn/morph-dictaphone",
@@ -14,7 +14,9 @@
     "speech-to-text",
     "audio",
     "transcription",
-    "whisper"
+    "whisper",
+    "streaming",
+    "nemotron"
   ],
   "permissions": {
     "mcp": {
@@ -52,12 +54,26 @@
         "entry": "dist/ui.js",
         "tag": "locaryn-dictaphone-btn",
         "hint": "Dicter votre message (cliquer pour écouter)"
+      },
+      {
+        "id": "dictaphone-catalogue",
+        "slot": "marketplace.catalogs",
+        "type": "data",
+        "entry": "dist/marketplace.json"
       }
     ]
   },
   "beta": true,
   "stability": "untested",
   "versions": [
+    {
+      "version": "2.5.0-beta.1",
+      "is_beta": true,
+      "summary": "Dictée en direct : le texte s'affiche pendant qu'on parle (provisoire atténué, définitif à chaque pause), avec Nemotron 3.5 ASR installé depuis le catalogue ; sans lui, la dictée classique reste en service",
+      "tag": "v2.5.0-beta.1",
+      "released_at": "2026-11-08",
+      "install_source": "Locaryn/morph-dictaphone@v2.5.0-beta.1"
+    },
     {
       "version": "2.4.1-beta.1",
       "is_beta": true,

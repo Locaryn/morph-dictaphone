@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub mod clip;
+pub mod live;
 
 // ── Réglages ────────────────────────────────────────────────────────────────
 
@@ -349,7 +350,7 @@ fn venvs() -> Vec<PathBuf> {
 /// Le cache HuggingFace suit ce que l'hôte désigne : sans cela le modèle
 /// whisper — plusieurs centaines de mégaoctets — atterrit dans `~/.cache` et
 /// remplit le disque système.
-fn python_env() -> Vec<(&'static str, String)> {
+pub(crate) fn python_env() -> Vec<(&'static str, String)> {
     let mut env = vec![
         // Sous Windows, Python écrit sa sortie dans la page de code de la
         // console (cp1252) ; lue en UTF-8, « dictée » devenait « dict�e ».

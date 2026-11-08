@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "refreshUrl": "https://raw.githubusercontent.com/Locaryn/morph-dictaphone/main/dist/marketplace.json",
+  "owns": [
+    "nemotron-3.5-asr",
+    "nemotron-speech-streaming"
+  ],
+  "categories": [
+    {
+      "id": "speech-to-text",
+      "label": "Transcription",
+      "labelEn": "Transcription",
+      "icon": "mic",
+      "matches": [
+        "speech-to-text",
+        "speech-to-text-streaming"
+      ],
+      "requires": [
+        "speech-to-text"
+      ]
+    }
+  ],
+  "models": [
+    {
+      "id": "nemotron-3.5-asr-streaming-0.6b",
+      "name": "Nemotron 3.5 ASR",
+      "brand": "NVIDIA",
+      "description": "Transcription en direct : le texte s'affiche pendant que vous parlez, environ 0,3 s après chaque mot. 40 langues dont le français, ponctuation et majuscules. 1,3 Go de mémoire vidéo ; sans place sur la carte, le processeur prend le relais, plus lentement.",
+      "descriptionEn": "Live transcription: text appears while you speak, about 0.3 s after each word. 40 languages including French, with punctuation and capitalization. 1.3 GB of video memory; without room on the GPU, the CPU takes over, more slowly.",
+      "license": "OpenMDW-1.1",
+      "releaseDate": "2026-06-04",
+      "releaseYear": 2026,
+      "capabilities": [
+        "speech-to-text",
+        "speech-to-text-streaming"
+      ],
+      "variants": [
+        {
+          "size": "F32 · 0.6B",
+          "params": 0.6,
+          "storageGb": 2.6,
+          "quants": [
+            "f32"
+          ],
+          "tag": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+          "downloads": []
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,10 @@
 // clip part vers `ui_transcribe_clip` (outil réservé au panneau, invisible du
 // modèle), puis le texte s'écrit dans le champ de saisie, lettre après lettre.
 //
+// Avec le modèle de transcription en direct installé (catalogue du morph), le
+// texte s'affiche pendant qu'on parle, au-dessus du composeur : provisoire en
+// atténué, définitif à chaque silence.
+//
 // Rendu dans le document, avec les classes de l'application : pas de racine
 // fantôme, le thème de l'hôte s'applique. Aucun attribut `style` : la
 // politique de sécurité de l'hôte les bloque. Les styles passent par
@@ -140,6 +144,392 @@
     return preparation;
   }
 
+  // ── Transcription en direct ──────────────────────────────────────────
+  //
+  // Le micro est lu en PCM 16 kHz par blocs de 160 ms et part vers
+  // `ui_live_audio`, qui rend le texte provisoire du segment en cours. Un
+  // silence clôt le segment : `ui_live_end` rend son texte définitif, qui
+  // remplace le provisoire et s'écrit dans le champ. Le modèle vient du
+  // catalogue du morph ; sans lui, la dictée classique reste en service.
+
+  var TAUX = 16000;
+  var BLOC_ENVOI = 2560; // 160 ms
+  var PREROLL = 5120; // 320 ms gardés avant la parole
+  var SILENCE_FIN_MS = 700;
+
+  var direct = null; // null : inconnu ; sinon la réponse de ui_live_status
+  var sondeDirect = null;
+  var conseilDonne = false;
+  function sonderDirect() {
+    if (sondeDirect) return sondeDirect;
+    sondeDirect = appeler("ui_live_status")
+      .then(function (etat) {
+        direct = etat;
+        // Paquets absents : ils s'installent en arrière-plan ; la dictée
+        // reste classique jusque-là.
+        if (etat.model_installed && !etat.packages) {
+          appeler("ui_live_prepare")
+            .then(function () {
+              direct = Object.assign({}, etat, { ready: true, packages: true });
+            })
+            .catch(function (e) {
+              console.warn("[dictaphone] installation du direct :", e);
+            });
+        }
+        return etat;
+      })
+      .catch(function (e) {
+        console.warn("[dictaphone] transcription en direct indisponible :", e);
+        direct = { ready: false };
+        return direct;
+      });
+    return sondeDirect;
+  }
+
+  function versInt16(f32) {
+    var out = new Int16Array(f32.length);
+    for (var i = 0; i < f32.length; i++) {
+      var v = Math.max(-1, Math.min(1, f32[i]));
+      out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+    }
+    return out;
+  }
+
+  function enBase64(i16) {
+    var octets = new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength);
+    var s = "";
+    for (var i = 0; i < octets.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, octets.subarray(i, i + 0x8000));
+    }
+    return btoa(s);
+  }
+
+  // Ramener le flux du micro à 16 kHz : la moyenne de chaque fenêtre suffit
+  // à la voix et évite le repliement le plus grossier.
+  function reechantillonner(entree, taux) {
+    if (taux === TAUX) return entree;
+    var r = taux / TAUX;
+    var n = Math.floor(entree.length / r);
+    var out = new Float32Array(n);
+    for (var i = 0; i < n; i++) {
+      var a = Math.floor(i * r);
+      var b = Math.min(entree.length, Math.floor((i + 1) * r)) || a + 1;
+      var s = 0;
+      for (var j = a; j < b; j++) s += entree[j];
+      out[i] = s / Math.max(1, b - a);
+    }
+    return out;
+  }
+
+  function concat(a, b) {
+    var out = new Float32Array(a.length + b.length);
+    out.set(a, 0);
+    out.set(b, a.length);
+    return out;
+  }
+
+  function enWav(f32) {
+    var pcm = versInt16(f32);
+    var buf = new ArrayBuffer(44 + pcm.byteLength);
+    var v = new DataView(buf);
+    var ecrire = function (o, s) {
+      for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+    };
+    ecrire(0, "RIFF");
+    v.setUint32(4, 36 + pcm.byteLength, true);
+    ecrire(8, "WAVEfmt ");
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true);
+    v.setUint32(24, TAUX, true);
+    v.setUint32(28, TAUX * 2, true);
+    v.setUint16(32, 2, true);
+    v.setUint16(34, 16, true);
+    ecrire(36, "data");
+    v.setUint32(40, pcm.byteLength, true);
+    new Int16Array(buf, 44).set(pcm);
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  // Le sous-titre : le définitif en clair, le provisoire atténué. Placé en
+  // position fixe au-dessus du bouton, pour ne pas dépendre du débordement
+  // du composeur.
+  function Sous_titre(ancre) {
+    this.ancre = ancre;
+    this.definitif = el("span", null, { color: "var(--text)" });
+    this.provisoire = el("span", { "aria-hidden": "true" }, { color: "var(--text-faint)", transition: "color 160ms ease" });
+    this.etat = el("span", { class: "locaryn-field-hint", role: "status" }, { display: "block", marginBottom: "4px" });
+    this.boite = el(
+      "div",
+      { class: "locaryn-card", "aria-live": "polite", "aria-label": "Transcription en direct" },
+      {
+        position: "fixed",
+        zIndex: "40",
+        width: "min(560px, calc(100vw - 32px))",
+        maxHeight: "30vh",
+        overflowY: "auto",
+        padding: "10px 12px",
+        fontSize: "var(--text-sm)",
+        lineHeight: "1.5",
+        boxSizing: "border-box",
+        overflowWrap: "anywhere",
+      },
+      [this.etat, el("p", null, { margin: "0" }, [this.definitif, this.provisoire])],
+    );
+    this.placer = this.placer.bind(this);
+    document.body.append(this.boite);
+    window.addEventListener("resize", this.placer);
+    this.placer();
+  }
+  Sous_titre.prototype.placer = function () {
+    var r = this.ancre.getBoundingClientRect();
+    var droite = Math.max(16, window.innerWidth - r.right);
+    this.boite.style.right = droite + "px";
+    this.boite.style.bottom = Math.max(16, window.innerHeight - r.top + 10) + "px";
+  };
+  Sous_titre.prototype.statut = function (texte) {
+    this.etat.textContent = texte || "";
+    this.etat.style.display = texte ? "block" : "none";
+  };
+  Sous_titre.prototype.montrer = function (definitif, provisoire) {
+    this.definitif.textContent = definitif;
+    this.provisoire.textContent = provisoire ? (definitif ? " " : "") + provisoire : "";
+    this.boite.scrollTop = this.boite.scrollHeight;
+  };
+  Sous_titre.prototype.fermer = function () {
+    window.removeEventListener("resize", this.placer);
+    this.boite.remove();
+  };
+
+  // Une dictée en direct : capture, détection de la parole, envois en file.
+  function Direct(ecoute, rappels) {
+    this.ecoute = ecoute;
+    // { provisoire(texte), definitif(id, texte), corriger(id, texte), echec(message) }
+    this.rappels = rappels;
+    this.enAttente = 0; // segments clos dont la repasse n'est pas revenue
+    this.minuteur = 0;
+    this.tout = new Float32Array(0); // gardé pour le repli sur la dictée classique
+    this.attente = new Float32Array(0);
+    this.preroll = new Float32Array(0);
+    this.parole = false;
+    this.silenceMs = 0;
+    this.plancher = 0.004;
+    this.file = [];
+    this.occupe = false;
+    this.pret = false;
+    this.echoue = false;
+    this.fini = null;
+  }
+
+  // Le module de capture : il recopie chaque tampon du micro vers la page.
+  // Un worklet tourne hors du fil principal ; quand la machine est chargée,
+  // ses messages attendent au lieu de se perdre.
+  var WORKLET =
+    "registerProcessor('locaryn-dictaphone-capture', class extends AudioWorkletProcessor {" +
+    "process(entrees) { var c = entrees[0] && entrees[0][0]; if (c) this.port.postMessage(c.slice(0)); return true; } });";
+
+  Direct.prototype.brancher = function () {
+    var self = this;
+    var ctx = this.ecoute.contexte;
+    var source = ctx.createMediaStreamSource(this.ecoute.flux);
+    var muet = ctx.createGain();
+    muet.gain.value = 0;
+    muet.connect(ctx.destination);
+    var recevoir = function (f32) {
+      self.recevoir(reechantillonner(f32, ctx.sampleRate));
+    };
+    var parScript = function () {
+      // Repli : l'ancien nœud, sur le fil principal.
+      self.noeud = ctx.createScriptProcessor(2048, 1, 1);
+      self.noeud.onaudioprocess = function (e) {
+        recevoir(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(self.noeud);
+      self.noeud.connect(muet);
+    };
+    if (!ctx.audioWorklet || !window.AudioWorkletNode) return Promise.resolve(parScript());
+    var url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
+    return ctx.audioWorklet
+      .addModule(url)
+      .then(function () {
+        self.noeud = new AudioWorkletNode(ctx, "locaryn-dictaphone-capture");
+        self.noeud.port.onmessage = function (e) {
+          recevoir(e.data);
+        };
+        source.connect(self.noeud);
+        self.noeud.connect(muet);
+      })
+      .catch(function (e) {
+        console.warn("[dictaphone] worklet refusé, capture sur le fil principal :", e);
+        parScript();
+      })
+      .finally(function () {
+        URL.revokeObjectURL(url);
+      });
+  };
+
+  Direct.prototype.demarrer = function (langue) {
+    var self = this;
+    this.brancher();
+    return appeler("ui_live_start", { language: langue })
+      .then(function (r) {
+        self.pret = true;
+        self.moteur = r.engine || {};
+        self.pomper();
+        return r;
+      })
+      .catch(function (e) {
+        self.echouer(e);
+        throw e;
+      });
+  };
+
+  // Un bloc de micro : niveau, parole ou silence, mise en file.
+  Direct.prototype.recevoir = function (morceau) {
+    if (this.arrete) return;
+    this.tout = concat(this.tout, morceau);
+    if (this.echoue) return;
+    var s = 0;
+    for (var i = 0; i < morceau.length; i++) s += morceau[i] * morceau[i];
+    var rms = Math.sqrt(s / Math.max(1, morceau.length));
+    var dureeMs = (morceau.length / TAUX) * 1000;
+    // Le plancher de bruit suit lentement le niveau le plus bas entendu.
+    this.plancher = rms < this.plancher ? rms : this.plancher * 1.002;
+    var parle = rms > Math.max(0.012, this.plancher * 3);
+    if (!this.parole) {
+      this.preroll = concat(this.preroll, morceau).slice(-PREROLL);
+      if (!parle) return;
+      this.parole = true;
+      this.silenceMs = 0;
+      this.attente = this.preroll;
+      this.preroll = new Float32Array(0);
+      return this.envoyerSiPlein();
+    }
+    this.attente = concat(this.attente, morceau);
+    this.silenceMs = parle ? 0 : this.silenceMs + dureeMs;
+    if (this.silenceMs >= SILENCE_FIN_MS) {
+      this.clore();
+      return;
+    }
+    this.envoyerSiPlein();
+  };
+
+  Direct.prototype.envoyerSiPlein = function () {
+    if (this.attente.length < BLOC_ENVOI) return;
+    this.file.push({ op: "audio", pcm: this.attente });
+    this.attente = new Float32Array(0);
+    this.pomper();
+  };
+
+  // Fin de segment : ce qui reste, puis la demande du texte définitif.
+  Direct.prototype.clore = function () {
+    if (this.attente.length) this.file.push({ op: "audio", pcm: this.attente });
+    this.attente = new Float32Array(0);
+    if (this.parole) this.file.push({ op: "end" });
+    this.parole = false;
+    this.silenceMs = 0;
+    this.pomper();
+  };
+
+  function texteDe(ecoute) {
+    return ecoute.textes
+      .map(function (x) {
+        return x.texte;
+      })
+      .join(" ");
+  }
+
+  var OUTIL = { audio: "ui_live_audio", end: "ui_live_end", poll: "ui_live_poll", drain: "ui_live_drain" };
+
+  // Un envoi à la fois ; les blocs audio en attente partent ensemble. File
+  // vide : en fin de dictée, la dernière repasse ; sinon, si des segments
+  // attendent la leur, un relevé un peu plus tard.
+  Direct.prototype.pomper = function () {
+    if (this.occupe || !this.pret || this.echoue) return;
+    var item = this.file.shift();
+    if (!item && this.fini && !this.vide) {
+      this.vide = true;
+      item = { op: "drain" };
+    }
+    if (!item) {
+      if (this.fini) this.fini();
+      else if (this.enAttente > 0) this.releverPlusTard();
+      return;
+    }
+    while (item.op === "audio" && this.file.length && this.file[0].op === "audio") {
+      item = { op: "audio", pcm: concat(item.pcm, this.file.shift().pcm) };
+    }
+    this.occupe = true;
+    var self = this;
+    var args = item.op === "audio" ? { pcm: enBase64(versInt16(item.pcm)) } : {};
+    appeler(OUTIL[item.op], args)
+      .then(function (r) {
+        self.occupe = false;
+        self.repondre(item.op, r);
+        self.pomper();
+      })
+      .catch(function (e) {
+        self.occupe = false;
+        self.echouer(e);
+      });
+  };
+
+  Direct.prototype.repondre = function (op, r) {
+    var self = this;
+    (r.corrections || []).forEach(function (c) {
+      self.enAttente = Math.max(0, self.enAttente - 1);
+      self.rappels.corriger(c.id, String(c.text || "").trim());
+    });
+    if (op === "end") {
+      var texte = String(r.final || "").trim();
+      if (texte) this.enAttente += 1;
+      this.rappels.definitif(r.id, texte);
+    } else if (op === "audio") {
+      this.rappels.provisoire(String(r.partial || ""));
+      // Un segment sans silence ne grandit pas sans fin.
+      if (r.full && this.parole) this.clore();
+    }
+  };
+
+  Direct.prototype.releverPlusTard = function () {
+    if (this.minuteur) return;
+    var self = this;
+    this.minuteur = setTimeout(function () {
+      self.minuteur = 0;
+      if (self.arrete || self.echoue || self.file.length || self.enAttente <= 0) return;
+      self.file.push({ op: "poll" });
+      self.pomper();
+    }, 500);
+  };
+
+  Direct.prototype.echouer = function (e) {
+    if (this.echoue) return;
+    this.echoue = true;
+    this.file = [];
+    this.rappels.echec(e && e.message ? e.message : String(e));
+    if (this.fini) this.fini();
+  };
+
+  // Arrêter la capture, vider la file ; la promesse se résout quand la
+  // dernière repasse est arrivée.
+  Direct.prototype.terminer = function () {
+    var self = this;
+    this.arrete = true;
+    clearTimeout(this.minuteur);
+    if (this.noeud) {
+      if (this.noeud.port) this.noeud.port.onmessage = null;
+      else this.noeud.onaudioprocess = null;
+      this.noeud.disconnect();
+    }
+    return new Promise(function (resolve) {
+      self.fini = resolve;
+      if (self.echoue) return resolve();
+      // Si le modèle charge encore, la file partira quand il sera prêt.
+      if (self.parole) self.clore();
+      else self.pomper();
+    });
+  };
+
   class LocarynDictaphoneBtn extends HTMLElement {
     constructor() {
       super();
@@ -154,6 +544,10 @@
     connectedCallback() {
       this.style.display = "inline-flex";
       this.style.alignItems = "center";
+      // Savoir si le direct est prêt coûte un lancement de Python : on le
+      // demande quand la main approche du bouton, pas au chargement.
+      this.addEventListener("pointerenter", sonderDirect, { once: true });
+      this.addEventListener("focusin", sonderDirect, { once: true });
       this.render();
     }
 
@@ -296,15 +690,23 @@
         toast("Ce navigateur ne permet pas d'enregistrer le micro.", "error");
         return;
       }
-      // La préparation part tout de suite : on parle pendant qu'elle se fait.
-      preparer().catch(function (e) {
-        console.warn("[dictaphone] préparation :", e);
-      });
       var self = this;
-      navigator.mediaDevices
-        .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
-        .then(function (flux) {
-          self.ouvrir(flux);
+      // Le mode (direct ou classique) se décide avant d'ouvrir le micro ; la
+      // réponse est rapide et gardée pour la session.
+      Promise.all([
+        navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }),
+        // Une réponse lente (premier lancement de Python) ne retient pas le
+        // micro : la dictée part en classique, le direct servira la fois
+        // suivante.
+        Promise.race([
+          sonderDirect(),
+          new Promise(function (r) {
+            setTimeout(r, 1500);
+          }),
+        ]),
+      ])
+        .then(function (r) {
+          self.ouvrir(r[0]);
         })
         .catch(function (e) {
           var refus = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
@@ -313,6 +715,136 @@
     }
 
     ouvrir(flux) {
+      if (direct && direct.ready) return this.ouvrirDirect(flux);
+      if (direct && direct.model && !direct.model_installed && !conseilDonne) {
+        conseilDonne = true;
+        toast(
+          "Pour voir le texte pendant que vous parlez, installez « Nemotron 3.5 ASR » depuis le catalogue des modèles (Transcription).",
+          "info",
+        );
+      }
+      return this.ouvrirClassique(flux);
+    }
+
+    // ── Mode en direct ──
+    ouvrirDirect(flux) {
+      var ecoute = { flux: flux, direct: true, annule: false, debut: Date.now(), contexte: null, analyseur: null };
+      this.brancherAnalyseur(ecoute);
+      if (!ecoute.contexte) return this.ouvrirClassique(flux);
+      var a = api();
+      var self = this;
+      ecoute.avant = a && a.chat ? a.chat.getText() : "";
+      ecoute.textes = [];
+      ecoute.sousTitre = new Sous_titre(this);
+      ecoute.sousTitre.statut("Chargement de la transcription en direct…");
+      ecoute.moteur = new Direct(ecoute, {
+        provisoire: function (t) {
+          if (self.ecoute !== ecoute) return;
+          ecoute.sousTitre.montrer(texteDe(ecoute), t);
+        },
+        definitif: function (id, t) {
+          if (self.ecoute !== ecoute && !ecoute.finalisation) return;
+          if (t) ecoute.textes.push({ id: id, texte: t });
+          self.majDirect(ecoute);
+        },
+        // La repasse complète d'un segment remplace son texte.
+        corriger: function (id, t) {
+          ecoute.textes.forEach(function (x) {
+            if (x.id === id && t) x.texte = t;
+          });
+          self.majDirect(ecoute);
+        },
+        echec: function (message) {
+          console.warn("[dictaphone] direct :", message);
+          ecoute.sousTitre.statut("Direct interrompu : la dictée sera transcrite à la fin.");
+        },
+      });
+      ecoute.moteur
+        .demarrer(navigator.language || "auto")
+        .then(function () {
+          var gpu = ecoute.moteur.moteur && ecoute.moteur.moteur.device === "cpu" ? " (processeur)" : "";
+          ecoute.sousTitre.statut(gpu ? "En direct" + gpu : "");
+        })
+        .catch(function (e) {
+          console.warn("[dictaphone] démarrage du direct :", e);
+        });
+      this.ecoute = ecoute;
+      this.etat = "ecoute";
+      document.addEventListener("keydown", this.surTouche, true);
+      this.render();
+    }
+
+    majDirect(ecoute) {
+      ecoute.sousTitre.montrer(texteDe(ecoute), "");
+      if (!ecoute.annule) this.ecrireDirect(ecoute);
+    }
+
+    ecrireDirect(ecoute) {
+      var a = api();
+      if (!a || !a.chat) return;
+      var avant = ecoute.avant;
+      var debut = avant && !/\s$/.test(avant) ? avant + " " : avant;
+      a.chat.setText(debut + texteDe(ecoute));
+    }
+
+    fermerDirect(ecoute, annuler) {
+      var self = this;
+      ecoute.annule = ecoute.annule || !!annuler;
+      ecoute.finalisation = true;
+      this.ecoute = null;
+      if (ecoute.annule) {
+        var a = api();
+        if (a && a.chat) a.chat.setText(ecoute.avant);
+      } else {
+        this.etat = "transcription";
+        this.render();
+      }
+      ecoute.sousTitre.statut(ecoute.annule ? "" : "Finalisation…");
+      ecoute.moteur.terminer().then(function () {
+        self.liberer(ecoute);
+        if (!ecoute.annule && ecoute.moteur.echoue) return self.reprendreClassique(ecoute);
+        ecoute.sousTitre.fermer();
+        self.etat = "repos";
+        self.render();
+        if (!ecoute.annule && !ecoute.textes.length) toast("Rien n'a été compris. Réessayez plus près du micro.", "warning");
+      });
+    }
+
+    // Le direct a lâché : tout ce qui a été dit repart en une fois par
+    // whisper, comme une dictée classique.
+    reprendreClassique(ecoute) {
+      var self = this;
+      ecoute.sousTitre.fermer();
+      var wav = enWav(ecoute.moteur.tout);
+      preparer()
+        .then(function () {
+          return enDataUrl(wav);
+        })
+        .then(function (url) {
+          return appeler("ui_transcribe_clip", { audio_base64: url, mime: "audio/wav" });
+        })
+        .then(function (res) {
+          self.etat = "repos";
+          self.render();
+          var a = api();
+          if (a && a.chat) a.chat.setText(ecoute.avant);
+          var texte = String(res.text || "").trim();
+          if (!texte) toast("Rien n'a été compris. Réessayez plus près du micro.", "warning");
+          else self.ecrire(texte);
+        })
+        .catch(function (e) {
+          self.etat = "repos";
+          self.render();
+          toast("Dictée impossible : " + (e && e.message ? e.message : String(e)), "error");
+        });
+    }
+
+    // ── Mode classique : un clip, transcrit à la fin ──
+    ouvrirClassique(flux) {
+      // La préparation part tout de suite : on parle pendant qu'elle se fait.
+      preparer().catch(function (e) {
+        console.warn("[dictaphone] préparation :", e);
+      });
       var type = typeAudio();
       var ecoute = {
         flux: flux,
@@ -364,6 +896,7 @@
 
     // Arrêter l'enregistreur ; `onstop` rend la suite à `apresEcoute`.
     fermer(ecoute, annuler) {
+      if (ecoute.direct) return this.fermerDirect(ecoute, annuler);
       ecoute.annule = ecoute.annule || !!annuler;
       if (ecoute.enregistreur.state !== "inactive") ecoute.enregistreur.stop();
       else this.apresEcoute(ecoute);
