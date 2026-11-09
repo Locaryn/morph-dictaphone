@@ -253,54 +253,38 @@
     return new Blob([buf], { type: "audio/wav" });
   }
 
-  // Le sous-titre : le définitif en clair, le provisoire atténué. Placé en
-  // position fixe au-dessus du bouton, pour ne pas dépendre du débordement
-  // du composeur.
-  function Sous_titre(ancre) {
-    this.ancre = ancre;
-    this.definitif = el("span", null, { color: "var(--text)" });
-    this.provisoire = el("span", { "aria-hidden": "true" }, { color: "var(--text-faint)", transition: "color 160ms ease" });
-    this.etat = el("span", { class: "locaryn-field-hint", role: "status" }, { display: "block", marginBottom: "4px" });
-    this.boite = el(
-      "div",
-      { class: "locaryn-card", "aria-live": "polite", "aria-label": "Transcription en direct" },
-      {
-        position: "fixed",
-        zIndex: "40",
-        width: "min(560px, calc(100vw - 32px))",
-        maxHeight: "30vh",
-        overflowY: "auto",
-        padding: "10px 12px",
-        fontSize: "var(--text-sm)",
-        lineHeight: "1.5",
-        boxSizing: "border-box",
-        overflowWrap: "anywhere",
-      },
-      [this.etat, el("p", null, { margin: "0" }, [this.definitif, this.provisoire])],
-    );
-    this.placer = this.placer.bind(this);
-    document.body.append(this.boite);
-    window.addEventListener("resize", this.placer);
-    this.placer();
+  // Le texte de la dictée s'écrit dans le champ, grisé, tant qu'elle n'est pas
+  // finie (`chat.setDraft` de l'application) : le définitif, puis le
+  // provisoire du segment en cours ; un état (chargement…) tant que rien n'est
+  // dit. `fermer` rend le champ normal, avec le texte posé par `setText`.
+  // Une application sans `setDraft` reçoit le texte définitif en clair.
+  function Sous_titre(avant) {
+    this.debut = avant && !/\s$/.test(avant) ? avant + " " : avant || "";
+    this.etat = "";
+    this.definitif = "";
+    this.provisoire = "";
+    this.ferme = false;
   }
-  Sous_titre.prototype.placer = function () {
-    var r = this.ancre.getBoundingClientRect();
-    var droite = Math.max(16, window.innerWidth - r.right);
-    this.boite.style.right = droite + "px";
-    this.boite.style.bottom = Math.max(16, window.innerHeight - r.top + 10) + "px";
+  Sous_titre.prototype.poser = function () {
+    var a = api();
+    if (this.ferme || !a || !a.chat || typeof a.chat.setDraft !== "function") return;
+    var dit = [this.definitif, this.provisoire].filter(Boolean).join(" ");
+    a.chat.setDraft(this.debut + (dit || this.etat));
   };
   Sous_titre.prototype.statut = function (texte) {
-    this.etat.textContent = texte || "";
-    this.etat.style.display = texte ? "block" : "none";
+    this.etat = texte || "";
+    this.poser();
   };
   Sous_titre.prototype.montrer = function (definitif, provisoire) {
-    this.definitif.textContent = definitif;
-    this.provisoire.textContent = provisoire ? (definitif ? " " : "") + provisoire : "";
-    this.boite.scrollTop = this.boite.scrollHeight;
+    this.definitif = definitif || "";
+    this.provisoire = provisoire || "";
+    this.poser();
   };
   Sous_titre.prototype.fermer = function () {
-    window.removeEventListener("resize", this.placer);
-    this.boite.remove();
+    if (this.ferme) return;
+    this.ferme = true;
+    var a = api();
+    if (a && a.chat && typeof a.chat.setDraft === "function") a.chat.setDraft(null);
   };
 
   // Une dictée en direct : capture, détection de la parole, envois en file.
@@ -737,7 +721,7 @@
       var self = this;
       ecoute.avant = a && a.chat ? a.chat.getText() : "";
       ecoute.textes = [];
-      ecoute.sousTitre = new Sous_titre(this);
+      ecoute.sousTitre = new Sous_titre(ecoute.avant);
       ecoute.sousTitre.statut("Chargement de la transcription en direct…");
       ecoute.moteur = new Direct(ecoute, {
         provisoire: function (t) {
@@ -765,7 +749,7 @@
         .demarrer(navigator.language || "auto")
         .then(function () {
           var gpu = ecoute.moteur.moteur && ecoute.moteur.moteur.device === "cpu" ? " (processeur)" : "";
-          ecoute.sousTitre.statut(gpu ? "En direct" + gpu : "");
+          ecoute.sousTitre.statut(gpu ? "À l'écoute" + gpu + "…" : "À l'écoute…");
         })
         .catch(function (e) {
           console.warn("[dictaphone] démarrage du direct :", e);
@@ -797,6 +781,7 @@
       if (ecoute.annule) {
         var a = api();
         if (a && a.chat) a.chat.setText(ecoute.avant);
+        ecoute.sousTitre.fermer();
       } else {
         this.etat = "transcription";
         this.render();
