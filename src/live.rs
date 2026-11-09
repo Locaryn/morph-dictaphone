@@ -174,6 +174,31 @@ pub async fn prepare() -> Result<Value, String> {
 
 // ── Le processus ────────────────────────────────────────────────────────────
 
+/// Ce qui fait parler les bibliothèques à chaque passe : barre de chargement
+/// des poids, avertissements de génération.
+const SILENCE: [(&str, &str); 3] = [
+    ("HF_HUB_DISABLE_PROGRESS_BARS", "1"),
+    ("TRANSFORMERS_VERBOSITY", "error"),
+    ("PYTHONWARNINGS", "ignore"),
+];
+
+/// La sortie d'erreur du processus, dans un fichier du dossier temporaire.
+/// Héritée, elle partait dans le tube de l'application, qui ne le vidait
+/// pas : plein, il figeait le processus puis le serveur (Locaryn/Locaryn#129).
+fn journal_du_processus() -> Stdio {
+    let chemin = std::env::temp_dir().join("locaryn-dictaphone-direct.log");
+    match std::fs::File::create(&chemin) {
+        Ok(f) => Stdio::from(f),
+        Err(e) => {
+            eprintln!(
+                "dictaphone : journal {} impossible ({e}), sortie d'erreur ignorée",
+                chemin.display()
+            );
+            Stdio::null()
+        }
+    }
+}
+
 async fn lancer() -> Result<Processus, String> {
     let chemin = modele()?;
     let python = find_python()
@@ -181,11 +206,11 @@ async fn lancer() -> Result<Processus, String> {
     let mut commande = std::process::Command::new(&python);
     commande
         .envs(python_env())
+        .envs(SILENCE)
         .args(["-u", "-c", WORKER])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // Les avertissements des bibliothèques vont au journal du serveur.
-        .stderr(Stdio::inherit());
+        .stderr(journal_du_processus());
     crate::hide_console(&mut commande);
     let mut enfant = tokio::process::Command::from(commande)
         .kill_on_drop(true)

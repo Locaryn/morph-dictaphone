@@ -17,6 +17,11 @@ async fn main() {
             Ok(request) => handle_request(request).await,
             Err(error) => error_response(Value::Null, -32700, format!("JSON invalide : {error}")),
         };
+        // Une notification n'attend pas de réponse : un `null` sur la sortie
+        // désaligne les clients qui lisent une ligne par requête.
+        if response.is_null() {
+            continue;
+        }
         if let Ok(serialized) = serde_json::to_string(&response) {
             println!("{serialized}");
             let _ = std::io::stdout().flush();

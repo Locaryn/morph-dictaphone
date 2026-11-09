@@ -156,6 +156,8 @@
   var BLOC_ENVOI = 2560; // 160 ms
   var PREROLL = 5120; // 320 ms gardés avant la parole
   var SILENCE_FIN_MS = 700;
+  // Fin de dictée : au-delà, on rend la main même sans la dernière repasse.
+  var FINALISATION_MAX_MS = 90000;
 
   var direct = null; // null : inconnu ; sinon la réponse de ui_live_status
   var sondeDirect = null;
@@ -800,8 +802,24 @@
         this.render();
       }
       ecoute.sousTitre.statut(ecoute.annule ? "" : "Finalisation…");
-      ecoute.moteur.terminer().then(function () {
+      // Un moteur qui ne répond plus ne garde pas le bandeau à l'écran : passé
+      // ce délai, le texte déjà dicté reste tel quel dans le champ.
+      var delai = new Promise(function (r) {
+        setTimeout(function () {
+          r("delai");
+        }, FINALISATION_MAX_MS);
+      });
+      Promise.race([ecoute.moteur.terminer(), delai]).then(function (issue) {
         self.liberer(ecoute);
+        if (issue === "delai") {
+          ecoute.moteur.echoue = true;
+          ecoute.moteur.file = [];
+          ecoute.sousTitre.fermer();
+          self.etat = "repos";
+          self.render();
+          if (!ecoute.annule) toast("La transcription en direct ne répond plus ; le texte déjà dicté est conservé.", "warning");
+          return;
+        }
         if (!ecoute.annule && ecoute.moteur.echoue) return self.reprendreClassique(ecoute);
         ecoute.sousTitre.fermer();
         self.etat = "repos";
