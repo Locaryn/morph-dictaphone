@@ -29,7 +29,7 @@ const MARQUE: &str = "@@LIVE@@";
 /// direct.
 const CAPACITE: &str = "speech-to-text-streaming";
 /// Sans appel pendant ce temps, le processus s'arrête et libère la carte.
-const REPOS: Duration = Duration::from_secs(120);
+const REPOS: Duration = Duration::from_secs(600);
 /// En dessous de cette mémoire vidéo libre, le processeur prend le relais :
 /// le modèle de conversation garde sa place.
 const VRAM_MIN_MB: u32 = 1800;
@@ -347,6 +347,19 @@ pub async fn start(langue: Option<String>) -> Result<Value, String> {
         .map(|p| p.infos.clone())
         .unwrap_or(Value::Null);
     Ok(json!({ "language": rep.get("language"), "engine": infos }))
+}
+
+/// Charger le modèle à l'avance (survol du bouton micro) : la dictée qui
+/// suit commence sans les 20 s de démarrage à froid.
+pub async fn warm() -> Result<Value, String> {
+    appel(json!({ "op": "ping" }), DELAI_CHARGEMENT).await?;
+    let infos = processus()
+        .lock()
+        .await
+        .as_ref()
+        .map(|p| p.infos.clone())
+        .unwrap_or(Value::Null);
+    Ok(json!({ "ready": true, "engine": infos }))
 }
 
 /// Un bloc de micro : PCM 16 bits, 16 kHz, mono, en base64.

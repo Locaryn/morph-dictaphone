@@ -162,6 +162,20 @@
   var direct = null; // null : inconnu ; sinon la réponse de ui_live_status
   var sondeDirect = null;
   var conseilDonne = false;
+  // Le modèle met une vingtaine de secondes à se charger : on le charge dès
+  // que la main approche du bouton, et il reste prêt dix minutes.
+  var dernierPrechauffage = 0;
+  function prechauffer() {
+    if (!direct || !direct.ready || Date.now() - dernierPrechauffage < 60000) return;
+    dernierPrechauffage = Date.now();
+    appeler("ui_live_warm").catch(function (e) {
+      dernierPrechauffage = 0;
+      console.warn("[dictaphone] préchauffage du direct :", e);
+    });
+  }
+  function approche() {
+    sonderDirect().then(prechauffer);
+  }
   function sonderDirect() {
     if (sondeDirect) return sondeDirect;
     sondeDirect = appeler("ui_live_status")
@@ -173,6 +187,7 @@
           appeler("ui_live_prepare")
             .then(function () {
               direct = Object.assign({}, etat, { ready: true, packages: true });
+              prechauffer();
             })
             .catch(function (e) {
               console.warn("[dictaphone] installation du direct :", e);
@@ -532,8 +547,8 @@
       this.style.alignItems = "center";
       // Savoir si le direct est prêt coûte un lancement de Python : on le
       // demande quand la main approche du bouton, pas au chargement.
-      this.addEventListener("pointerenter", sonderDirect, { once: true });
-      this.addEventListener("focusin", sonderDirect, { once: true });
+      this.addEventListener("pointerenter", approche);
+      this.addEventListener("focusin", approche);
       this.render();
     }
 
@@ -681,13 +696,15 @@
       // réponse est rapide et gardée pour la session.
       Promise.all([
         navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }),
-        // Une réponse lente (premier lancement de Python) ne retient pas le
-        // micro : la dictée part en classique, le direct servira la fois
-        // suivante.
+        // Une réponse très lente ne retient pas le micro indéfiniment : passé
+        // 6 s, la dictée part en classique.
         Promise.race([
-          sonderDirect(),
+          sonderDirect().then(function (etat) {
+            prechauffer();
+            return etat;
+          }),
           new Promise(function (r) {
-            setTimeout(r, 1500);
+            setTimeout(r, 6000);
           }),
         ]),
       ])
@@ -722,7 +739,7 @@
       ecoute.avant = a && a.chat ? a.chat.getText() : "";
       ecoute.textes = [];
       ecoute.sousTitre = new Sous_titre(ecoute.avant);
-      ecoute.sousTitre.statut("Chargement de la transcription en direct…");
+      ecoute.sousTitre.statut("Préparation de la dictée en direct… parlez, rien ne sera perdu");
       ecoute.moteur = new Direct(ecoute, {
         provisoire: function (t) {
           if (self.ecoute !== ecoute) return;

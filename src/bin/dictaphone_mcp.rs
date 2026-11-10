@@ -126,6 +126,11 @@ fn tools_list() -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
+                "name": "ui_live_warm",
+                "description": "Charger à l'avance le modèle de la transcription en direct.",
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
                 "name": "ui_live_start",
                 "description": "Ouvrir une dictée en direct : charge le modèle s'il ne l'est pas.",
                 "inputSchema": {
@@ -185,6 +190,7 @@ async fn call_tool(name: &str, args: Value) -> Result<Value, String> {
         }
         "ui_live_status" => Ok(live::status().await),
         "ui_live_prepare" => live::prepare().await,
+        "ui_live_warm" => live::warm().await,
         "ui_live_start" => {
             let langue = args
                 .get("language")

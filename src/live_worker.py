@@ -455,6 +455,8 @@ def traiter(moteur, ligne):
             repondre(moteur.finir())
         elif op == "drain":
             repondre(moteur.vider())
+        elif op == "ping":
+            repondre({"ok": True})
         elif op == "poll":
             repondre(moteur.sonder())
         elif op == "quit":
